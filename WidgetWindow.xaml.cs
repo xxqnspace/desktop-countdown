@@ -5,6 +5,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Effects;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using DesktopCountdown.Helpers;
@@ -17,13 +18,28 @@ public partial class WidgetWindow : Window
 {
     private readonly App _app;
     private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromSeconds(1) };
+    private readonly bool _usesSystemBackdrop;
     private bool _hasNotifiedEnd;
     private readonly ObservableCollection<CountdownSegment> _countdownSegments = new();
 
+    /// <summary>允许真正关闭（切换背景模式需要重建窗口时置为 true）。</summary>
+    internal bool ForceClose { get; set; }
+
     public WidgetWindow(App app)
     {
-        InitializeComponent();
         _app = app;
+        _usesSystemBackdrop = LessonWindow.ShouldUseSystemBackdrop(app.Config);
+
+        InitializeComponent();
+
+        if (_usesSystemBackdrop)
+        {
+            // 系统亚克力要求窗口为普通窗口（非 layered），且窗口自身不绘制背景。
+            AllowsTransparency = false;
+            Background = null;
+            SourceInitialized += OnSourceInitialized;
+        }
+
         CountdownItems.ItemsSource = _countdownSegments;
         _timer.Tick += (_, _) => RefreshCountdown();
         _timer.Start();
@@ -34,9 +50,18 @@ public partial class WidgetWindow : Window
     private const double BaseWidth = 300.0;
     private const double BaseHeight = 150.0;
 
+    public bool UsesSystemBackdrop => _usesSystemBackdrop;
+
     public void ApplyConfig()
     {
         var config = _app.Config;
+
+        if (LessonWindow.ShouldUseSystemBackdrop(config) != _usesSystemBackdrop)
+        {
+            _app.RecreateWidget();
+            return;
+        }
+
         Width = Math.Max(config.Window.Width, MinWidth);
         Height = Math.Max(config.Window.Height, MinHeight);
         Left = config.Window.Left;
@@ -50,11 +75,25 @@ public partial class WidgetWindow : Window
 
         RootBorder.CornerRadius = new CornerRadius(config.Appearance.CornerRadius);
         RootBorder.BorderBrush = config.Appearance.BorderEnabled ? ColorHelper.BrushFrom(config.Appearance.BorderColor, System.Windows.Media.Brushes.White) : System.Windows.Media.Brushes.Transparent;
-        RootBorder.Background = CreateBackgroundBrush(config.Appearance);
+        RootBorder.Background = AppearanceBrushFactory.Create(config.Appearance, _usesSystemBackdrop);
+        RootBorder.Effect = _usesSystemBackdrop
+            ? null
+            : new DropShadowEffect { BlurRadius = Math.Max(4, config.Appearance.BlurRadius), ShadowDepth = 8, Opacity = 0.22 };
         Opacity = config.Appearance.Opacity;
 
         RefreshCountdown();
         UpdateFontSizes();
+    }
+
+    private void OnSourceInitialized(object? sender, EventArgs e)
+    {
+        var appearance = _app.Config.Appearance;
+        var applied = WindowBackdropHelper.Apply(this, SystemBackdropKind.Acrylic, appearance.AcrylicTintColor);
+        if (!applied)
+        {
+            Background = AppearanceBrushFactory.Create(appearance, false);
+            RootBorder.Background = System.Windows.Media.Brushes.Transparent;
+        }
     }
 
     private void RefreshCountdown()
@@ -153,48 +192,6 @@ public partial class WidgetWindow : Window
         return menu;
     }
 
-    private System.Windows.Media.Brush CreateBackgroundBrush(AppearanceConfig appearance)
-    {
-        if (appearance.BackgroundMode == BackgroundMode.Image &&
-            !string.IsNullOrWhiteSpace(appearance.BackgroundImagePath) &&
-            File.Exists(appearance.BackgroundImagePath))
-        {
-            var image = new BitmapImage();
-            image.BeginInit();
-            image.CacheOption = BitmapCacheOption.OnLoad;
-            image.UriSource = new Uri(appearance.BackgroundImagePath);
-            image.EndInit();
-            return new ImageBrush(image)
-            {
-                Stretch = appearance.ImageStretch switch
-                {
-                    ImageStretchMode.Fill => Stretch.Fill,
-                    ImageStretchMode.Uniform => Stretch.Uniform,
-                    _ => Stretch.UniformToFill
-                }
-            };
-        }
-
-        if (appearance.BackgroundMode == BackgroundMode.Solid)
-        {
-            return ColorHelper.BrushFrom(appearance.BackgroundColor, new SolidColorBrush(System.Windows.Media.Color.FromArgb(210, 255, 255, 255)));
-        }
-
-        if (appearance.BackgroundMode == BackgroundMode.Gradient)
-        {
-            return new LinearGradientBrush(
-                ColorHelper.ColorFrom(appearance.BackgroundColor, System.Windows.Media.Color.FromArgb(210, 255, 255, 255)),
-                ColorHelper.ColorFrom(appearance.AccentColor, System.Windows.Media.Color.FromArgb(180, 124, 183, 255)),
-                35);
-        }
-
-        var brush = new LinearGradientBrush { StartPoint = new System.Windows.Point(0, 0), EndPoint = new System.Windows.Point(1, 1) };
-        brush.GradientStops.Add(new GradientStop(System.Windows.Media.Color.FromArgb(210, 255, 255, 255), 0));
-        brush.GradientStops.Add(new GradientStop(System.Windows.Media.Color.FromArgb(120, 124, 183, 255), 0.48));
-        brush.GradientStops.Add(new GradientStop(System.Windows.Media.Color.FromArgb(170, 255, 255, 255), 1));
-        return brush;
-    }
-
     private void Window_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
         if (!_app.Config.Window.Locked)
@@ -207,6 +204,7 @@ public partial class WidgetWindow : Window
     {
         _app.Config.Window.Left = Left;
         _app.Config.Window.Top = Top;
+        _app.SyncLessonWindowPosition();
         _app.SaveConfig();
     }
 
@@ -214,6 +212,7 @@ public partial class WidgetWindow : Window
     {
         _app.Config.Window.Width = Width;
         _app.Config.Window.Height = Height;
+        _app.SyncLessonWindowPosition();
         _app.SaveConfig();
         UpdateFontSizes();
     }
@@ -244,7 +243,7 @@ public partial class WidgetWindow : Window
 
     private void Window_Closing(object sender, CancelEventArgs e)
     {
-        if (_app.IsExiting)
+        if (_app.IsExiting || ForceClose)
         {
             return;
         }

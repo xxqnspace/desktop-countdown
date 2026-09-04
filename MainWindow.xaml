@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="桌面倒计时设置"
         Width="720"
-        Height="620"
+        Height="800"
         MinWidth="640"
         MinHeight="560"
         WindowStartupLocation="CenterScreen"
@@ -95,6 +95,7 @@
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
 
                         <TextBlock Text="背景模式" />
@@ -103,6 +104,7 @@
                             <ComboBoxItem Content="纯色" Tag="Solid" />
                             <ComboBoxItem Content="渐变" Tag="Gradient" />
                             <ComboBoxItem Content="图片" Tag="Image" />
+                            <ComboBoxItem Content="系统亚克力（Win11）" Tag="Acrylic" />
                         </ComboBox>
 
                         <TextBlock Grid.Row="1" Text="背景颜色" Margin="0,12,0,0" />
@@ -119,7 +121,76 @@
                             <Button Content="选择图片" DockPanel.Dock="Right" Margin="8,0,0,0" Click="ChooseImageButton_Click" />
                             <TextBox x:Name="BackgroundImageBox" IsReadOnly="True" />
                         </DockPanel>
+
+                        <TextBlock Grid.Row="5" Text="亚克力着色" Margin="0,12,0,0" />
+                        <TextBox x:Name="AcrylicTintBox" Grid.Row="5" Grid.Column="1" Margin="0,12,0,0" ToolTip="系统亚克力模式下的着色层，示例：#66111820" />
                     </Grid>
+                </GroupBox>
+
+                <GroupBox Header="课程提示" Padding="16" Margin="0,0,0,16">
+                    <StackPanel>
+                        <WrapPanel>
+                            <CheckBox x:Name="LessonEnabledBox" Content="启用课程提示窗口" Margin="0,0,24,8" />
+                            <CheckBox x:Name="LessonFollowBox" Content="吸附在倒计时窗口下方" Margin="0,0,24,8" />
+                        </WrapPanel>
+
+                        <TextBlock Text="上课中显示「当前是第X节课 / 距下课还有XX分钟」，课间显示「下一节是第X节课 / 距上课还有X分钟」。"
+                                   TextWrapping="Wrap"
+                                   Margin="0,4,0,10"
+                                   Foreground="#6B7280" />
+
+                        <Grid Margin="0,0,0,4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="110" />
+                                <ColumnDefinition Width="96" />
+                                <ColumnDefinition Width="96" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="节次" Foreground="#6B7280" />
+                            <TextBlock Grid.Column="1" Text="上课" Margin="6,0,0,0" Foreground="#6B7280" />
+                            <TextBlock Grid.Column="2" Text="下课" Margin="6,0,0,0" Foreground="#6B7280" />
+                        </Grid>
+
+                        <ItemsControl x:Name="LessonList">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Grid Margin="0,0,0,6">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="110" />
+                                            <ColumnDefinition Width="96" />
+                                            <ColumnDefinition Width="96" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBox Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}" />
+                                        <TextBox Grid.Column="1" Text="{Binding StartText, UpdateSourceTrigger=PropertyChanged}" Margin="6,0,0,0" />
+                                        <TextBox Grid.Column="2" Text="{Binding EndText, UpdateSourceTrigger=PropertyChanged}" Margin="6,0,0,0" />
+                                        <Button Grid.Column="3" Content="删除" Margin="6,0,0,0" Click="RemoveLessonButton_Click" Tag="{Binding}" />
+                                    </Grid>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+
+                        <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
+                            <Button Content="添加一节课" Click="AddLessonButton_Click" />
+                            <Button Content="恢复默认作息" Margin="8,0,0,0" Click="ResetLessonButton_Click" />
+                        </StackPanel>
+
+                        <Grid Margin="0,14,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="90" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="90" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="文字颜色" />
+                            <TextBox x:Name="LessonTextColorBox" Grid.Column="1" ToolTip="课程窗口文字颜色，示例：#FF000000" />
+                            <TextBlock Grid.Column="2" Text="背景着色" Margin="12,0,0,0" />
+                            <TextBox x:Name="LessonTintBox" Grid.Column="3" Margin="6,0,0,0" ToolTip="系统亚克力模式下的浅色着色，示例：#CCFFFFFF" />
+                        </Grid>
+
+                        <TextBlock Text="放学后文案" Margin="0,14,0,0" />
+                        <TextBox x:Name="LessonIdleBox" Margin="0,6,0,0" />
+                    </StackPanel>
                 </GroupBox>
 
                 <GroupBox Header="行为" Padding="16">

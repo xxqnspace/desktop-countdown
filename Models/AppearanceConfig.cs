@@ -4,7 +4,7 @@ namespace DesktopCountdown.Models;
 
 public sealed class AppearanceConfig
 {
-    public BackgroundMode BackgroundMode { get; set; } = BackgroundMode.LiquidGlass;
+    public BackgroundMode BackgroundMode { get; set; } = BackgroundMode.Acrylic;
     public string BackgroundColor { get; set; } = "#CCFFFFFF";
     public string AccentColor { get; set; } = "#7CB7FF";
     public double Opacity { get; set; } = 0.86;
@@ -16,6 +16,9 @@ public sealed class AppearanceConfig
     public ImageStretchMode ImageStretch { get; set; } = ImageStretchMode.UniformToFill;
     public string FontFamily { get; set; } = "Segoe UI";
     public string TextColor { get; set; } = "#FFFFFFFF";
+
+    /// <summary>系统亚克力之上的着色层（ARGB），用于在任意壁纸上保证文字可读。</summary>
+    public string AcrylicTintColor { get; set; } = "#66111820";
 }
 
 [JsonConverter(typeof(JsonStringEnumConverter<BackgroundMode>))]
@@ -24,7 +27,9 @@ public enum BackgroundMode
     LiquidGlass,
     Solid,
     Gradient,
-    Image
+    Image,
+    /// <summary>Windows 11 真实亚克力（系统级模糊），不可用时自动回退为 LiquidGlass。</summary>
+    Acrylic
 }
 
 [JsonConverter(typeof(JsonStringEnumConverter<ImageStretchMode>))]

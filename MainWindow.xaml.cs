@@ -1,19 +1,27 @@
+using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Globalization;
 using System.Windows;
+using System.Windows.Controls;
 using DesktopCountdown.Models;
+
+// UseWindowsForms 会隐式引入 System.Windows.Forms，以下别名用于消除 Button 的二义性。
+using Button = System.Windows.Controls.Button;
 
 namespace DesktopCountdown;
 
 public partial class MainWindow : Window
 {
     private readonly App _app;
+    private readonly ObservableCollection<LessonPeriod> _lessonItems = new();
+    private string _lessonWarning = string.Empty;
 
     public MainWindow(App app)
     {
         InitializeComponent();
         _app = app;
         InitializeTimeSelectors();
+        LessonList.ItemsSource = _lessonItems;
     }
 
     public void ApplyConfigToControls()
@@ -38,10 +46,12 @@ public partial class MainWindow : Window
             BackgroundMode.Solid => 1,
             BackgroundMode.Gradient => 2,
             BackgroundMode.Image => 3,
+            BackgroundMode.Acrylic => 4,
             _ => 0
         };
         BackgroundColorBox.Text = config.Appearance.BackgroundColor;
         TextColorBox.Text = config.Appearance.TextColor;
+        AcrylicTintBox.Text = config.Appearance.AcrylicTintColor;
         OpacitySlider.Value = config.Appearance.Opacity;
         BackgroundImageBox.Text = config.Appearance.BackgroundImagePath ?? string.Empty;
 
@@ -49,6 +59,14 @@ public partial class MainWindow : Window
         LockedBox.IsChecked = config.Window.Locked;
         AutoStartBox.IsChecked = config.Behavior.AutoStart;
         NotifyOnEndBox.IsChecked = config.Countdown.NotifyOnEnd;
+
+        LessonEnabledBox.IsChecked = config.Schedule.Enabled;
+        LessonFollowBox.IsChecked = config.Schedule.FollowWidget;
+        LessonTextColorBox.Text = config.Schedule.TextColor;
+        LessonTintBox.Text = config.Schedule.BackgroundTint;
+        LessonIdleBox.Text = config.Schedule.IdleText;
+        ReloadLessonItems(config.Schedule.Lessons);
+
         StatusText.Text = string.Empty;
     }
 
@@ -56,9 +74,11 @@ public partial class MainWindow : Window
     {
         try
         {
+            _lessonWarning = string.Empty;
             ApplyControlsToConfig();
             _app.ApplyConfigChanges();
-            StatusText.Text = $"已保存：{DateTime.Now:HH:mm:ss}";
+            StatusText.Text = $"已保存：{DateTime.Now:HH:mm:ss}" +
+                              (string.IsNullOrEmpty(_lessonWarning) ? string.Empty : $"（{_lessonWarning}）");
         }
         catch (Exception ex)
         {
@@ -102,21 +122,156 @@ public partial class MainWindow : Window
             1 => BackgroundMode.Solid,
             2 => BackgroundMode.Gradient,
             3 => BackgroundMode.Image,
+            4 => BackgroundMode.Acrylic,
             _ => BackgroundMode.LiquidGlass
         };
         config.Appearance.BackgroundColor = NormalizeColor(BackgroundColorBox.Text, "#CCFFFFFF");
         config.Appearance.TextColor = NormalizeColor(TextColorBox.Text, "#FFFFFFFF");
+        config.Appearance.AcrylicTintColor = NormalizeColor(AcrylicTintBox.Text, "#66111820");
         config.Appearance.Opacity = Math.Clamp(OpacitySlider.Value, 0.2, 1);
         config.Appearance.BackgroundImagePath = string.IsNullOrWhiteSpace(BackgroundImageBox.Text) ? null : BackgroundImageBox.Text.Trim();
 
         config.Window.Topmost = TopmostBox.IsChecked == true;
         config.Window.Locked = LockedBox.IsChecked == true;
 
+        ApplyLessonControlsToConfig();
+
         var autoStart = AutoStartBox.IsChecked == true;
         if (autoStart != config.Behavior.AutoStart)
         {
             _app.SetAutoStart(autoStart);
         }
+    }
+
+    /// <summary>把课程提示设置写回配置，并校验时间格式。</summary>
+    private void ApplyLessonControlsToConfig()
+    {
+        var schedule = _app.Config.Schedule;
+        schedule.Enabled = LessonEnabledBox.IsChecked == true;
+        schedule.FollowWidget = LessonFollowBox.IsChecked == true;
+        schedule.TextColor = NormalizeColor(LessonTextColorBox.Text, "#FF000000");
+        schedule.BackgroundTint = NormalizeColor(LessonTintBox.Text, "#CCFFFFFF");
+        schedule.IdleText = string.IsNullOrWhiteSpace(LessonIdleBox.Text) ? "放学啦，注意休息" : LessonIdleBox.Text.Trim();
+
+        var lessons = new List<LessonPeriod>();
+        var invalidCount = 0;
+
+        foreach (var item in _lessonItems)
+        {
+            var start = NormalizeTime(item.StartText);
+            var end = NormalizeTime(item.EndText);
+            if (start is null || end is null)
+            {
+                invalidCount++;
+                continue;
+            }
+
+            var name = string.IsNullOrWhiteSpace(item.Name) ? $"第{ToChineseNumber(lessons.Count + 1)}节" : item.Name.Trim();
+            lessons.Add(new LessonPeriod { Name = name, StartText = start, EndText = end });
+        }
+
+        if (invalidCount > 0)
+        {
+            _lessonWarning = $"已忽略 {invalidCount} 行时间格式错误";
+        }
+
+        if (lessons.Count == 0)
+        {
+            // 全部无效时保留原有课表，避免课程窗口突然失效。
+            return;
+        }
+
+        lessons.Sort((a, b) => string.CompareOrdinal(a.StartText, b.StartText));
+        schedule.Lessons = lessons;
+    }
+
+    private void ReloadLessonItems(IEnumerable<LessonPeriod> lessons)
+    {
+        _lessonItems.Clear();
+        foreach (var lesson in lessons)
+        {
+            _lessonItems.Add(lesson.Clone());
+        }
+    }
+
+    private static string? NormalizeTime(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        var parts = value.Trim().Replace('：', ':').Split(':');
+        if (parts.Length < 2)
+        {
+            return null;
+        }
+
+        if (!int.TryParse(parts[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out var hour) ||
+            !int.TryParse(parts[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var minute))
+        {
+            return null;
+        }
+
+        if (hour is < 0 or > 23 || minute is < 0 or > 59)
+        {
+            return null;
+        }
+
+        return $"{hour:00}:{minute:00}";
+    }
+
+    private static string ToChineseNumber(int value)
+    {
+        var digits = new[] { "零", "一", "二", "三", "四", "五", "六", "七", "八", "九" };
+
+        if (value < 10)
+        {
+            return digits[value];
+        }
+
+        if (value == 10)
+        {
+            return "十";
+        }
+
+        if (value < 20)
+        {
+            return "十" + digits[value - 10];
+        }
+
+        if (value < 100)
+        {
+            var tens = value / 10;
+            var ones = value % 10;
+            return digits[tens] + "十" + (ones == 0 ? string.Empty : digits[ones]);
+        }
+
+        return value.ToString(CultureInfo.InvariantCulture);
+    }
+
+    private void AddLessonButton_Click(object sender, RoutedEventArgs e)
+    {
+        var last = _lessonItems.Count > 0 ? _lessonItems[^1] : null;
+        _lessonItems.Add(new LessonPeriod
+        {
+            Name = $"第{ToChineseNumber(_lessonItems.Count + 1)}节",
+            StartText = last?.EndText ?? "08:00",
+            EndText = last?.EndText ?? "08:45"
+        });
+    }
+
+    private void RemoveLessonButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button { Tag: LessonPeriod lesson })
+        {
+            _lessonItems.Remove(lesson);
+        }
+    }
+
+    private void ResetLessonButton_Click(object sender, RoutedEventArgs e)
+    {
+        ReloadLessonItems(ScheduleConfig.CreateDefaultLessons());
     }
 
     private static string NormalizeColor(string value, string fallback)

@@ -9,4 +9,5 @@ public sealed class AppConfig
     public AppearanceConfig Appearance { get; set; } = new();
     public WindowStateConfig Window { get; set; } = new();
     public BehaviorConfig Behavior { get; set; } = new();
+    public ScheduleConfig Schedule { get; set; } = new();
 }

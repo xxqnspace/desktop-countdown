@@ -13,6 +13,7 @@ public partial class App : System.Windows.Application
     private Forms.NotifyIcon? _notifyIcon;
     private MainWindow? _settingsWindow;
     private WidgetWindow? _widgetWindow;
+    private LessonWindow? _lessonWindow;
 
     public AppConfig Config { get; private set; } = new();
     public bool IsExiting { get; private set; }
@@ -32,6 +33,7 @@ public partial class App : System.Windows.Application
         _configService = new ConfigService();
         _autoStartService = new AutoStartService();
         Config = _configService.Load();
+        MigrateConfig(Config);
         Config.Behavior.AutoStart = _autoStartService.IsEnabled();
 
         CreateTrayIcon();
@@ -42,6 +44,25 @@ public partial class App : System.Windows.Application
         {
             ShowSettings();
         }
+    }
+
+    /// <summary>
+    /// 配置升级：SchemaVersion 1 → 2 时，把旧的「液态玻璃」升级为真实的系统亚克力。
+    /// 液态玻璃仍作为兼容性回退方案保留，可在设置中手动选择。
+    /// </summary>
+    private static void MigrateConfig(AppConfig config)
+    {
+        if (config.SchemaVersion >= 2)
+        {
+            return;
+        }
+
+        if (config.Appearance.BackgroundMode == BackgroundMode.LiquidGlass)
+        {
+            config.Appearance.BackgroundMode = BackgroundMode.Acrylic;
+        }
+
+        config.SchemaVersion = 2;
     }
 
     public void ShowSettings()
@@ -60,12 +81,16 @@ public partial class App : System.Windows.Application
         {
             _widgetWindow.Show();
         }
+
+        UpdateLessonWindowVisibility();
+        SyncLessonWindowPosition();
     }
 
     public void HideWidget()
     {
         Config.Window.Visible = false;
         _widgetWindow?.Hide();
+        _lessonWindow?.Hide();
         SaveConfig();
         RefreshTrayMenu();
     }
@@ -80,16 +105,101 @@ public partial class App : System.Windows.Application
         else
         {
             _widgetWindow?.Hide();
+            _lessonWindow?.Hide();
         }
 
         SaveConfig();
         RefreshTrayMenu();
     }
 
+    /// <summary>隐藏课程提示窗口（关闭开关）。</summary>
+    public void HideLesson()
+    {
+        Config.Schedule.Enabled = false;
+        _lessonWindow?.Hide();
+        SaveConfig();
+        RefreshTrayMenu();
+    }
+
+    /// <summary>切换课程提示窗口显示状态。</summary>
+    public void ToggleLesson()
+    {
+        Config.Schedule.Enabled = !Config.Schedule.Enabled;
+        UpdateLessonWindowVisibility();
+        SaveConfig();
+        RefreshTrayMenu();
+    }
+
+    /// <summary>按配置显示或隐藏课程窗口（与悬浮窗可见性联动）。</summary>
+    public void UpdateLessonWindowVisibility()
+    {
+        if (!Config.Schedule.Enabled || !Config.Window.Visible)
+        {
+            _lessonWindow?.Hide();
+            return;
+        }
+
+        _lessonWindow ??= new LessonWindow(this);
+        _lessonWindow.ApplyConfig();
+        _lessonWindow.Show();
+        SyncLessonWindowPosition();
+    }
+
+    /// <summary>吸附模式下让课程窗口跟随倒计时窗口的位置与宽度。</summary>
+    public void SyncLessonWindowPosition()
+    {
+        if (_lessonWindow is null || _widgetWindow is null)
+        {
+            return;
+        }
+
+        if (!Config.Schedule.Enabled || !Config.Schedule.FollowWidget)
+        {
+            return;
+        }
+
+        if (!_lessonWindow.IsVisible || !_widgetWindow.IsVisible)
+        {
+            return;
+        }
+
+        _lessonWindow.FollowTo(_widgetWindow);
+    }
+
+    /// <summary>背景模式在「系统亚克力 / 自绘」之间切换时，需要重建悬浮窗（AllowsTransparency 不可运行时修改）。</summary>
+    public void RecreateWidget()
+    {
+        var previous = _widgetWindow;
+        _widgetWindow = null;
+        ShowWidget();
+
+        if (previous is not null)
+        {
+            previous.ForceClose = true;
+            previous.Close();
+        }
+    }
+
+    /// <summary>同上，重建课程提示窗口。</summary>
+    public void RecreateLessonWindow()
+    {
+        var previous = _lessonWindow;
+        _lessonWindow = null;
+        UpdateLessonWindowVisibility();
+
+        if (previous is not null)
+        {
+            previous.ForceClose = true;
+            previous.Close();
+        }
+    }
+
     public void ApplyConfigChanges()
     {
         Config.IsFirstRun = false;
         _widgetWindow?.ApplyConfig();
+        UpdateLessonWindowVisibility();
+        SyncLessonWindowPosition();
         SaveConfig();
         RefreshTrayMenu();
     }
@@ -123,6 +233,14 @@ public partial class App : System.Windows.Application
             Config.Window.Top = _widgetWindow.Top;
             Config.Window.Width = _widgetWindow.Width;
             Config.Window.Height = _widgetWindow.Height;
+        }
+
+        if (_lessonWindow is not null && !Config.Schedule.FollowWidget)
+        {
+            Config.Schedule.Window.Left = _lessonWindow.Left;
+            Config.Schedule.Window.Top = _lessonWindow.Top;
+            Config.Schedule.Window.Width = _lessonWindow.Width;
+            Config.Schedule.Window.Height = _lessonWindow.Height;
         }
 
         SaveConfig();
@@ -166,6 +284,23 @@ public partial class App : System.Windows.Application
         var menu = new Forms.ContextMenuStrip();
         menu.Items.Add(Config.Window.Visible ? "隐藏悬浮窗" : "显示悬浮窗", null, (_, _) => Dispatcher.Invoke(ToggleWidgetVisibility));
         menu.Items.Add("打开设置", null, (_, _) => Dispatcher.Invoke(ShowSettings));
+
+        var lessonItem = new Forms.ToolStripMenuItem("课程提示窗口")
+        {
+            Checked = Config.Schedule.Enabled,
+            CheckOnClick = true,
+            Enabled = Config.Window.Visible
+        };
+        lessonItem.CheckedChanged += (_, _) => Dispatcher.Invoke(() =>
+        {
+            if (lessonItem.Checked == Config.Schedule.Enabled)
+            {
+                return;
+            }
+
+            ToggleLesson();
+        });
+        menu.Items.Add(lessonItem);
 
         var topmostItem = new Forms.ToolStripMenuItem("始终置顶")
         {
