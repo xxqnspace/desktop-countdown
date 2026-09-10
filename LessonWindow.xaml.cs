@@ -3,7 +3,6 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
-using System.Windows.Media.Effects;
 using System.Windows.Threading;
 using DesktopCountdown.Helpers;
 using DesktopCountdown.Models;
@@ -23,50 +22,28 @@ public partial class LessonWindow : Window
 
     private readonly App _app;
     private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromSeconds(1) };
-    private readonly bool _usesSystemBackdrop;
     private string _lastPrimary = "";
     private string _lastSecondary = "";
-
-    /// <summary>允许真正关闭（切换背景模式需要重建窗口时置为 true）。</summary>
-    internal bool ForceClose { get; set; }
 
     public LessonWindow(App app)
     {
         _app = app;
-        _usesSystemBackdrop = ShouldUseSystemBackdrop(app.Config);
 
         InitializeComponent();
 
-        if (_usesSystemBackdrop)
-        {
-            AllowsTransparency = false;
-            Background = null;
-            SourceInitialized += OnSourceInitialized;
-        }
+        // 同 WidgetWindow：统一使用 layered 窗口，形状由每像素 alpha 决定，
+        // 圆角可跟随配置任意设置且带抗锯齿；亚克力模糊可在运行时开/关。
+        SourceInitialized += OnSourceInitialized;
 
         ContextMenu = BuildContextMenu();
-        _timer.Tick += (_, _) => Refresh();
+        _timer.Tick += OnTimerTick;
         _timer.Start();
     }
-
-    /// <summary>是否应使用系统亚克力背景（DWM 级别）。</summary>
-    public static bool ShouldUseSystemBackdrop(AppConfig config)
-    {
-        return WindowBackdropHelper.IsSupported && config.Appearance.BackgroundMode == BackgroundMode.Acrylic;
-    }
-
-    public bool UsesSystemBackdrop => _usesSystemBackdrop;
 
     public void ApplyConfig()
     {
         var config = _app.Config;
         var schedule = config.Schedule;
-
-        if (ShouldUseSystemBackdrop(config) != _usesSystemBackdrop)
-        {
-            _app.RecreateLessonWindow();
-            return;
-        }
 
         if (!schedule.FollowWidget)
         {
@@ -80,18 +57,45 @@ public partial class LessonWindow : Window
         FontFamily = new System.Windows.Media.FontFamily(config.Appearance.FontFamily);
         Foreground = ColorHelper.BrushFrom(schedule.TextColor, System.Windows.Media.Brushes.Black);
 
-        RootBorder.CornerRadius = new CornerRadius(config.Appearance.CornerRadius);
+        var cornerRadius = config.Appearance.CornerRadius;
+        RootBorder.CornerRadius = new CornerRadius(cornerRadius);
         RootBorder.BorderBrush = config.Appearance.BorderEnabled
-            ? ColorHelper.BrushFrom(config.Appearance.BorderColor, System.Windows.Media.Brushes.Black)
+            ? config.Appearance.AeroGlassEffect
+                ? AppearanceBrushFactory.CreateAeroGlowBorder(config.Appearance.AeroGlassIntensity)
+                : ColorHelper.BrushFrom(config.Appearance.BorderColor, System.Windows.Media.Brushes.Black)
             : new SolidColorBrush(System.Windows.Media.Color.FromArgb(60, 0, 0, 0));
         RootBorder.Background = BuildBackdropBrush(config);
-        RootBorder.Effect = _usesSystemBackdrop
-            ? null
-            : new DropShadowEffect { BlurRadius = Math.Max(4, config.Appearance.BlurRadius), ShadowDepth = 8, Opacity = 0.22 };
+        ApplyAeroLayers(config.Appearance, cornerRadius);
+        // Keep the layered window's bounds equal to the rounded card. A WPF
+        // shadow effect expands those bounds and leaves a rectangular halo.
+        RootBorder.Effect = null;
+
+        // layered 窗口可以整体半透明，直接用用户设置的透明度。
         Opacity = config.Appearance.Opacity;
 
+        UpdateAcrylicBlur();
         Refresh();
         UpdateFontSizes();
+    }
+
+    /// <summary>应用经典 Aero 玻璃质感（顶部高光 + 斜向反射）。关闭时清空叠加层。</summary>
+    private void ApplyAeroLayers(AppearanceConfig appearance, double cornerRadius)
+    {
+        // 叠加层用与 RootBorder 完全相同的圆角，避免四角露出 1px 的边。
+        var inner = new CornerRadius(Math.Max(0, cornerRadius));
+        AeroHighlightBorder.CornerRadius = inner;
+        AeroSheenBorder.CornerRadius = inner;
+
+        if (appearance.AeroGlassEffect)
+        {
+            AeroHighlightBorder.Background = AppearanceBrushFactory.CreateAeroHighlight(appearance.AeroGlassIntensity);
+            AeroSheenBorder.Background = AppearanceBrushFactory.CreateAeroSheen(appearance.AeroGlassIntensity);
+        }
+        else
+        {
+            AeroHighlightBorder.Background = null;
+            AeroSheenBorder.Background = null;
+        }
     }
 
     /// <summary>吸附到倒计时窗口正下方，并与其同宽。</summary>
@@ -110,27 +114,46 @@ public partial class LessonWindow : Window
 
     private void OnSourceInitialized(object? sender, EventArgs e)
     {
-        var config = _app.Config;
-        var applied = WindowBackdropHelper.Apply(this, SystemBackdropKind.Acrylic, config.Schedule.BackgroundTint);
-        if (!applied)
-        {
-            // 系统背景不可用时回退为自绘背景，避免出现黑色窗口。
-            Background = BuildBackdropBrush(config);
-            RootBorder.Background = System.Windows.Media.Brushes.Transparent;
-        }
+        UpdateAcrylicBlur();
     }
 
-    /// <summary>课程窗口背景：系统亚克力下叠加浅色着色层（保证黑字可读），其余模式复用外观配置。</summary>
+    /// <summary>
+    /// 按当前配置开/关窗口背后的亚克力模糊。从亚克力模式切到其他模式时必须显式关闭，
+    /// 否则 accent 策略会残留。
+    /// </summary>
+    private void UpdateAcrylicBlur()
+    {
+        // DWM Acrylic paints the whole layered window rectangle. Clear any
+        // previous accent and use the clipped WPF glass brush instead.
+        WindowBackdropHelper.DisableAcrylicBlur(this);
+    }
+
+    private void OnTimerTick(object? sender, EventArgs e)
+    {
+        Refresh();
+    }
+
+    protected override void OnClosed(EventArgs e)
+    {
+        // DispatcherTimer 会被 Dispatcher 强引用，不停止会导致已关闭的窗口永久驻留内存。
+        _timer.Stop();
+        _timer.Tick -= OnTimerTick;
+        base.OnClosed(e);
+    }
+
+    /// <summary>
+    /// 课程窗口背景：亚克力模式下叠加一层浅色着色（保证黑字可读），
+    /// 其余模式复用外观配置。上限压到 0x66，避免与 accent 策略的同色着色叠加过白。
+    /// </summary>
     private System.Windows.Media.Brush BuildBackdropBrush(AppConfig config)
     {
-        if (_usesSystemBackdrop)
-        {
-            var tint = ColorHelper.ColorFrom(config.Schedule.BackgroundTint, System.Windows.Media.Color.FromArgb(0xCC, 0xFF, 0xFF, 0xFF));
-            tint.A = Math.Min(tint.A, (byte)0xE6);
-            return new SolidColorBrush(tint);
-        }
-
-        return AppearanceBrushFactory.Create(config.Appearance, false);
+        // Match the countdown card's material selection. DWM itself remains
+        // disabled for the layered window, but the Acrylic tint brush is still
+        // rendered inside the rounded card so both cards stay in sync.
+        return AppearanceBrushFactory.Create(
+            config.Appearance,
+            WindowBackdropHelper.ShouldUseAcrylicBlur(config),
+            config.Appearance.Opacity);
     }
 
     private void Refresh()
@@ -197,7 +220,7 @@ public partial class LessonWindow : Window
 
         _app.Config.Schedule.Window.Left = Left;
         _app.Config.Schedule.Window.Top = Top;
-        _app.SaveConfig();
+        _app.RequestConfigSave();
     }
 
     private void Window_SizeChanged(object sender, SizeChangedEventArgs e)
@@ -211,12 +234,12 @@ public partial class LessonWindow : Window
 
         _app.Config.Schedule.Window.Width = Width;
         _app.Config.Schedule.Window.Height = Height;
-        _app.SaveConfig();
+        _app.RequestConfigSave();
     }
 
     private void Window_Closing(object sender, CancelEventArgs e)
     {
-        if (_app.IsExiting || ForceClose)
+        if (_app.IsExiting)
         {
             return;
         }

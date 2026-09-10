@@ -4,6 +4,11 @@ namespace DesktopCountdown.Services;
 
 public static class CountdownFormatter
 {
+    /// <summary>
+    /// 把剩余时间拆分为「数值 + 单位」的展示段。
+    /// <para>本方法为纯函数：不修改传入的 <paramref name="units"/>。
+    /// 全部单位都未勾选时，仅在本次计算中按「天」显示，不会回写到配置。</para>
+    /// </summary>
     public static List<CountdownSegment> Format(DateTimeOffset target, DisplayUnitConfig units)
     {
         var remaining = target - DateTimeOffset.Now;
@@ -12,24 +17,17 @@ public static class CountdownFormatter
             remaining = TimeSpan.Zero;
         }
 
-        var selected = new[]
-        {
-            units.ShowDays,
-            units.ShowHours,
-            units.ShowMinutes,
-            units.ShowSeconds
-        };
-
-        if (!selected.Any(x => x))
-        {
-            units.ShowDays = true;
-        }
-
-        var result = new List<CountdownSegment>();
         var showDays = units.ShowDays;
         var showHours = units.ShowHours;
         var showMinutes = units.ShowMinutes;
         var showSeconds = units.ShowSeconds;
+
+        if (!showDays && !showHours && !showMinutes && !showSeconds)
+        {
+            showDays = true;
+        }
+
+        var result = new List<CountdownSegment>();
 
         if (showDays && !showHours && !showMinutes && !showSeconds)
         {
@@ -59,9 +57,9 @@ public static class CountdownFormatter
         }
 
         var totalSeconds = (long)Math.Floor(remaining.TotalSeconds);
-        var highest = showDays ? 0 : showHours ? 1 : showMinutes ? 2 : 3;
+        var highest = showDays ? 0 : showHours ? 1 : 2;
 
-        if (highest == 0)
+        if (showDays)
         {
             var days = totalSeconds / 86400;
             totalSeconds %= 86400;
@@ -84,7 +82,7 @@ public static class CountdownFormatter
 
         if (showSeconds)
         {
-            result.Add(new CountdownSegment(totalSeconds.ToString(showSeconds && highest != 3 ? "00" : "0"), "秒"));
+            result.Add(new CountdownSegment(totalSeconds.ToString("00"), "秒"));
         }
 
         return result;

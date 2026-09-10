@@ -38,8 +38,11 @@
             </StackPanel>
         </Border>
 
-        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
-            <StackPanel Margin="24" Orientation="Vertical">
+        <Grid Grid.Row="1">
+            <TabControl Margin="24" Background="Transparent">
+                <TabItem Header="倒计时">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <StackPanel Margin="0,16,0,0">
                 <GroupBox Header="倒计时" Padding="16" Margin="0,0,0,16">
                     <Grid>
                         <Grid.ColumnDefinitions>
@@ -82,7 +85,13 @@
                         <CheckBox x:Name="CeilingDaysBox" Content="只显示天时向上取整" Margin="0,0,24,8" />
                     </WrapPanel>
                 </GroupBox>
+                        </StackPanel>
+                    </ScrollViewer>
+                </TabItem>
 
+                <TabItem Header="外观">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <StackPanel Margin="0,16,0,0">
                 <GroupBox Header="外观" Padding="16" Margin="0,0,0,16">
                     <Grid>
                         <Grid.ColumnDefinitions>
@@ -96,10 +105,18 @@
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
 
                         <TextBlock Text="背景模式" />
-                        <ComboBox x:Name="BackgroundModeBox" Grid.Column="1" SelectedIndex="0">
+                        <ComboBox x:Name="BackgroundModeBox" Grid.Column="1" SelectedIndex="0" SelectionChanged="BackgroundModeBox_SelectionChanged">
                             <ComboBoxItem Content="液态玻璃" Tag="LiquidGlass" />
                             <ComboBoxItem Content="纯色" Tag="Solid" />
                             <ComboBoxItem Content="渐变" Tag="Gradient" />
@@ -124,9 +141,51 @@
 
                         <TextBlock Grid.Row="5" Text="亚克力着色" Margin="0,12,0,0" />
                         <TextBox x:Name="AcrylicTintBox" Grid.Row="5" Grid.Column="1" Margin="0,12,0,0" ToolTip="系统亚克力模式下的着色层，示例：#66111820" />
+
+                        <TextBlock Grid.Row="6" Text="圆角" Margin="0,12,0,0" />
+                        <TextBox x:Name="CornerRadiusBox" Grid.Row="6" Grid.Column="1" Margin="0,12,0,0" ToolTip="单位像素，0 为直角，示例：18" />
+
+                        <TextBlock Grid.Row="7" Text="边框" Margin="0,12,0,0" />
+                        <DockPanel Grid.Row="7" Grid.Column="1" Margin="0,12,0,0">
+                            <CheckBox x:Name="BorderEnabledBox" Content="显示边框" DockPanel.Dock="Left" VerticalAlignment="Center" />
+                            <TextBox x:Name="BorderColorBox" Margin="12,0,0,0" ToolTip="边框颜色，示例：#66FFFFFF" />
+                        </DockPanel>
+
+                        <TextBlock Grid.Row="8" Text="字体" Margin="0,12,0,0" />
+                        <TextBox x:Name="FontFamilyBox" Grid.Row="8" Grid.Column="1" Margin="0,12,0,0" ToolTip="示例：Segoe UI / 微软雅黑" />
+
+                        <TextBlock Grid.Row="9" Text="强调色" Margin="0,12,0,0" />
+                        <TextBox x:Name="AccentColorBox" Grid.Row="9" Grid.Column="1" Margin="0,12,0,0" ToolTip="仅「渐变」背景使用，示例：#7CB7FF" />
+
+                        <TextBlock Grid.Row="10" Text="阴影模糊" Margin="0,12,0,0" />
+                        <Slider x:Name="BlurRadiusSlider" Grid.Row="10" Grid.Column="1" Margin="0,12,0,0" Minimum="0" Maximum="60" TickFrequency="2" ToolTip="仅非亚克力模式生效" />
+
+                        <TextBlock Grid.Row="11" Text="图片填充" Margin="0,12,0,0" />
+                        <ComboBox x:Name="ImageStretchBox" Grid.Row="11" Grid.Column="1" Margin="0,12,0,0" ToolTip="仅「图片」背景使用">
+                            <ComboBoxItem Content="裁剪填满（推荐）" Tag="UniformToFill" />
+                            <ComboBoxItem Content="完整显示（可能留边）" Tag="Uniform" />
+                            <ComboBoxItem Content="拉伸填满（可能变形）" Tag="Fill" />
+                        </ComboBox>
+
+                        <TextBlock Grid.Row="12" Text="玻璃质感" Margin="0,12,0,0" />
+                        <CheckBox x:Name="AeroGlassBox"
+                                  Grid.Row="12"
+                                  Grid.Column="1"
+                                  Margin="0,12,0,0"
+                                  Content="经典 Aero 高光（顶部高光 + 斜向反射 + 边框发光）"
+                                  ToolTip="叠加在背景之上，营造 Vista/7 玻璃质感" />
+
+                        <TextBlock Grid.Row="13" Text="高光强度" Margin="0,12,0,0" />
+                        <Slider x:Name="AeroIntensitySlider" Grid.Row="13" Grid.Column="1" Margin="0,12,0,0" Minimum="0" Maximum="1" TickFrequency="0.05" ToolTip="1 为默认；调低可减弱高光以免影响文字对比度" />
                     </Grid>
                 </GroupBox>
+                        </StackPanel>
+                    </ScrollViewer>
+                </TabItem>
 
+                <TabItem Header="课程提醒">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <StackPanel Margin="0,16,0,0">
                 <GroupBox Header="课程提示" Padding="16" Margin="0,0,0,16">
                     <StackPanel>
                         <WrapPanel>
@@ -192,7 +251,13 @@
                         <TextBox x:Name="LessonIdleBox" Margin="0,6,0,0" />
                     </StackPanel>
                 </GroupBox>
+                        </StackPanel>
+                    </ScrollViewer>
+                </TabItem>
 
+                <TabItem Header="行为">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <StackPanel Margin="0,16,0,0">
                 <GroupBox Header="行为" Padding="16">
                     <WrapPanel>
                         <CheckBox x:Name="TopmostBox" Content="始终置顶" Margin="0,0,24,8" />
@@ -201,8 +266,11 @@
                         <CheckBox x:Name="NotifyOnEndBox" Content="结束时通知" Margin="0,0,24,8" />
                     </WrapPanel>
                 </GroupBox>
-            </StackPanel>
-        </ScrollViewer>
+                        </StackPanel>
+                    </ScrollViewer>
+                </TabItem>
+            </TabControl>
+        </Grid>
 
         <Border Grid.Row="2" Background="White" BorderBrush="#E5E7EB" BorderThickness="0,1,0,0" Padding="24,16">
             <DockPanel>

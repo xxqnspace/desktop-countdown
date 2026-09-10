@@ -100,12 +100,14 @@ public static class ScheduleService
     public static string DescribeRemaining(TimeSpan remaining)
     {
         var totalSeconds = Math.Max(0, remaining.TotalSeconds);
-        var minutes = (int)Math.Ceiling(totalSeconds / 60.0);
 
-        if (minutes <= 0)
+        // 先判不足 1 分钟：若先做 Ceiling，任何 0 < 秒数 < 60 都会被进位成 1 分钟，该文案将永远不可达。
+        if (totalSeconds < 60)
         {
             return "不足 1 分钟";
         }
+
+        var minutes = (int)Math.Ceiling(totalSeconds / 60.0);
 
         if (minutes < 60)
         {
@@ -122,5 +124,48 @@ public static class ScheduleService
     {
         var text = string.IsNullOrWhiteSpace(name) ? "下一节" : name.Trim();
         return text.EndsWith("课", StringComparison.Ordinal) ? prefix + text : prefix + text + "课";
+    }
+
+    /// <summary>
+    /// 找出时间相互重叠的节次，用于设置界面的校验提示。
+    /// <para>注意：本服务按「当天时刻」判断，不支持跨越零点的节次（如 23:30–00:20），
+    /// 这类配置会被 <see cref="Evaluate"/> 当作无效行忽略。</para>
+    /// </summary>
+    public static bool TryFindOverlap(IReadOnlyList<LessonPeriod> lessons, out string description)
+    {
+        description = string.Empty;
+
+        var parsed = new List<(string Name, TimeSpan Start, TimeSpan End)>();
+        foreach (var lesson in lessons)
+        {
+            if (lesson is null)
+            {
+                continue;
+            }
+
+            var start = lesson.StartTime;
+            var end = lesson.EndTime;
+            if (start is null || end is null || end <= start)
+            {
+                continue;
+            }
+
+            parsed.Add((lesson.Name ?? string.Empty, start.Value, end.Value));
+        }
+
+        parsed.Sort((a, b) => a.Start.CompareTo(b.Start));
+
+        for (int i = 1; i < parsed.Count; i++)
+        {
+            if (parsed[i].Start < parsed[i - 1].End)
+            {
+                var previous = string.IsNullOrWhiteSpace(parsed[i - 1].Name) ? "上一节" : parsed[i - 1].Name;
+                var current = string.IsNullOrWhiteSpace(parsed[i].Name) ? "本节" : parsed[i].Name;
+                description = $"{previous} 与 {current} 时间重叠";
+                return true;
+            }
+        }
+
+        return false;
     }
 }

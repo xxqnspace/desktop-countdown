@@ -3,7 +3,9 @@ using System.ComponentModel;
 using System.Globalization;
 using System.Windows;
 using System.Windows.Controls;
+using DesktopCountdown.Helpers;
 using DesktopCountdown.Models;
+using DesktopCountdown.Services;
 
 // UseWindowsForms 会隐式引入 System.Windows.Forms，以下别名用于消除 Button 的二义性。
 using Button = System.Windows.Controls.Button;
@@ -14,7 +16,7 @@ public partial class MainWindow : Window
 {
     private readonly App _app;
     private readonly ObservableCollection<LessonPeriod> _lessonItems = new();
-    private string _lessonWarning = string.Empty;
+    private readonly List<string> _saveWarnings = new();
 
     public MainWindow(App app)
     {
@@ -52,8 +54,23 @@ public partial class MainWindow : Window
         BackgroundColorBox.Text = config.Appearance.BackgroundColor;
         TextColorBox.Text = config.Appearance.TextColor;
         AcrylicTintBox.Text = config.Appearance.AcrylicTintColor;
-        OpacitySlider.Value = config.Appearance.Opacity;
+        OpacitySlider.Value = Math.Clamp(config.Appearance.Opacity, OpacitySlider.Minimum, OpacitySlider.Maximum);
         BackgroundImageBox.Text = config.Appearance.BackgroundImagePath ?? string.Empty;
+
+        CornerRadiusBox.Text = config.Appearance.CornerRadius.ToString("0.#", CultureInfo.InvariantCulture);
+        BorderEnabledBox.IsChecked = config.Appearance.BorderEnabled;
+        BorderColorBox.Text = config.Appearance.BorderColor;
+        FontFamilyBox.Text = config.Appearance.FontFamily;
+        AccentColorBox.Text = config.Appearance.AccentColor;
+        BlurRadiusSlider.Value = Math.Clamp(config.Appearance.BlurRadius, BlurRadiusSlider.Minimum, BlurRadiusSlider.Maximum);
+        ImageStretchBox.SelectedIndex = config.Appearance.ImageStretch switch
+        {
+            ImageStretchMode.Uniform => 1,
+            ImageStretchMode.Fill => 2,
+            _ => 0
+        };
+        AeroGlassBox.IsChecked = config.Appearance.AeroGlassEffect;
+        AeroIntensitySlider.Value = Math.Clamp(config.Appearance.AeroGlassIntensity, AeroIntensitySlider.Minimum, AeroIntensitySlider.Maximum);
 
         TopmostBox.IsChecked = config.Window.Topmost;
         LockedBox.IsChecked = config.Window.Locked;
@@ -67,18 +84,23 @@ public partial class MainWindow : Window
         LessonIdleBox.Text = config.Schedule.IdleText;
         ReloadLessonItems(config.Schedule.Lessons);
 
+        _saveWarnings.Clear();
         StatusText.Text = string.Empty;
+        UpdateAppearanceControlState();
     }
 
     private void SaveButton_Click(object sender, RoutedEventArgs e)
     {
         try
         {
-            _lessonWarning = string.Empty;
+            _saveWarnings.Clear();
             ApplyControlsToConfig();
             _app.ApplyConfigChanges();
-            StatusText.Text = $"已保存：{DateTime.Now:HH:mm:ss}" +
-                              (string.IsNullOrEmpty(_lessonWarning) ? string.Empty : $"（{_lessonWarning}）");
+
+            var suffix = _saveWarnings.Count == 0
+                ? string.Empty
+                : $"（{string.Join("；", _saveWarnings)}）";
+            StatusText.Text = $"已保存：{DateTime.Now:HH:mm:ss}{suffix}";
         }
         catch (Exception ex)
         {
@@ -100,6 +122,11 @@ public partial class MainWindow : Window
         config.Countdown.TargetDateTime = new DateTimeOffset(localTarget);
         config.Countdown.EndText = string.IsNullOrWhiteSpace(EndTextBox.Text) ? "已结束" : EndTextBox.Text.Trim();
         config.Countdown.NotifyOnEnd = NotifyOnEndBox.IsChecked == true;
+
+        if (localTarget <= DateTime.Now)
+        {
+            _saveWarnings.Add("目标时间已过，悬浮窗会直接显示结束文案");
+        }
 
         var showDays = ShowDaysBox.IsChecked == true;
         var showHours = ShowHoursBox.IsChecked == true;
@@ -131,6 +158,26 @@ public partial class MainWindow : Window
         config.Appearance.Opacity = Math.Clamp(OpacitySlider.Value, 0.2, 1);
         config.Appearance.BackgroundImagePath = string.IsNullOrWhiteSpace(BackgroundImageBox.Text) ? null : BackgroundImageBox.Text.Trim();
 
+        config.Appearance.CornerRadius = ParseNumber(CornerRadiusBox.Text, config.Appearance.CornerRadius, 0, 200);
+        config.Appearance.BorderEnabled = BorderEnabledBox.IsChecked == true;
+        config.Appearance.BorderColor = NormalizeColor(BorderColorBox.Text, "#66FFFFFF");
+        config.Appearance.FontFamily = string.IsNullOrWhiteSpace(FontFamilyBox.Text) ? "Segoe UI" : FontFamilyBox.Text.Trim();
+        config.Appearance.AccentColor = NormalizeColor(AccentColorBox.Text, "#7CB7FF");
+        config.Appearance.BlurRadius = Math.Clamp(BlurRadiusSlider.Value, 0, 200);
+        config.Appearance.ImageStretch = ImageStretchBox.SelectedIndex switch
+        {
+            1 => ImageStretchMode.Uniform,
+            2 => ImageStretchMode.Fill,
+            _ => ImageStretchMode.UniformToFill
+        };
+        config.Appearance.AeroGlassEffect = AeroGlassBox.IsChecked == true;
+        config.Appearance.AeroGlassIntensity = Math.Clamp(AeroIntensitySlider.Value, 0, 1);
+
+        if (AppearanceBrushFactory.IsBackgroundImageMissing(config.Appearance))
+        {
+            _saveWarnings.Add("背景图片不存在，已回退为纯色");
+        }
+
         config.Window.Topmost = TopmostBox.IsChecked == true;
         config.Window.Locked = LockedBox.IsChecked == true;
 
@@ -143,7 +190,7 @@ public partial class MainWindow : Window
         }
     }
 
-    /// <summary>把课程提示设置写回配置，并校验时间格式。</summary>
+    /// <summary>把课程提示设置写回配置，并校验时间格式与节次重叠。</summary>
     private void ApplyLessonControlsToConfig()
     {
         var schedule = _app.Config.Schedule;
@@ -172,13 +219,18 @@ public partial class MainWindow : Window
 
         if (invalidCount > 0)
         {
-            _lessonWarning = $"已忽略 {invalidCount} 行时间格式错误";
+            _saveWarnings.Add($"已忽略 {invalidCount} 行时间格式错误");
         }
 
         if (lessons.Count == 0)
         {
             // 全部无效时保留原有课表，避免课程窗口突然失效。
             return;
+        }
+
+        if (ScheduleService.TryFindOverlap(lessons, out var overlap))
+        {
+            _saveWarnings.Add($"{overlap}，重叠部分只显示靠前的一节");
         }
 
         lessons.Sort((a, b) => string.CompareOrdinal(a.StartText, b.StartText));
@@ -285,6 +337,14 @@ public partial class MainWindow : Window
         return fallback;
     }
 
+    /// <summary>解析数值输入，非法时保留原值并限制到指定区间。</summary>
+    private static double ParseNumber(string value, double current, double min, double max)
+    {
+        return double.TryParse(value?.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed)
+            ? Math.Clamp(parsed, min, max)
+            : Math.Clamp(current, min, max);
+    }
+
     private void InitializeTimeSelectors()
     {
         TargetHourBox.ItemsSource = Enumerable.Range(0, 24).Select(x => x.ToString("00", CultureInfo.InvariantCulture)).ToList();
@@ -308,6 +368,40 @@ public partial class MainWindow : Window
         {
             BackgroundImageBox.Text = dialog.FileName;
             BackgroundModeBox.SelectedIndex = 3;
+        }
+    }
+
+    private void BackgroundModeBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        UpdateAppearanceControlState();
+    }
+
+    private void UpdateAppearanceControlState()
+    {
+        // SelectionChanged is raised while InitializeComponent is still
+        // constructing the ComboBox. Other named controls are not available
+        // yet at that point, so defer the first state refresh until loading.
+        if (BackgroundModeBox is null || BackgroundImageBox is null ||
+            ImageStretchBox is null || AcrylicTintBox is null ||
+            BackgroundColorBox is null || AccentColorBox is null ||
+            StatusText is null)
+        {
+            return;
+        }
+
+        var isImage = BackgroundModeBox.SelectedIndex == 3;
+        var isAcrylic = BackgroundModeBox.SelectedIndex == 4;
+        var usesColor = !isImage;
+
+        BackgroundImageBox.IsEnabled = isImage;
+        ImageStretchBox.IsEnabled = isImage;
+        AcrylicTintBox.IsEnabled = isAcrylic;
+        BackgroundColorBox.IsEnabled = usesColor && !isAcrylic;
+        AccentColorBox.IsEnabled = BackgroundModeBox.SelectedIndex == 2 || BackgroundModeBox.SelectedIndex == 0;
+
+        if (isAcrylic)
+        {
+            StatusText.Text = "系统 Acrylic 在分层窗口中会自动使用圆角玻璃回退材质";
         }
     }
 

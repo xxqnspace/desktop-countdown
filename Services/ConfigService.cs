@@ -21,21 +21,29 @@ public sealed class ConfigService
 
     public AppConfig Load()
     {
+        AppConfig config;
+
         if (!File.Exists(ConfigPath))
         {
-            return new AppConfig();
+            config = new AppConfig();
+        }
+        else
+        {
+            try
+            {
+                var json = File.ReadAllText(ConfigPath);
+                config = JsonSerializer.Deserialize<AppConfig>(json, _jsonOptions) ?? new AppConfig();
+            }
+            catch
+            {
+                TryBackupBrokenConfig();
+                config = new AppConfig();
+            }
         }
 
-        try
-        {
-            var json = File.ReadAllText(ConfigPath);
-            return JsonSerializer.Deserialize<AppConfig>(json, _jsonOptions) ?? new AppConfig();
-        }
-        catch
-        {
-            TryBackupBrokenConfig();
-            return new AppConfig();
-        }
+        // 手改 config.json 很容易写出显式 null / 越界数值，加载后统一兜底，避免启动即崩溃。
+        config.Normalize();
+        return config;
     }
 
     public void Save(AppConfig config)
@@ -47,38 +55,71 @@ public sealed class ConfigService
         File.Move(tempPath, ConfigPath, true);
     }
 
-    private static string ResolveConfigPath()
+    /// <summary>
+    /// 备份当前配置文件，返回备份路径（失败时返回 null）。
+    /// </summary>
+    public string? Backup(string tag)
     {
-        var appDirectory = AppContext.BaseDirectory;
-        var appConfigPath = Path.Combine(appDirectory, "config.json");
+        if (!File.Exists(ConfigPath))
+        {
+            return null;
+        }
 
         try
         {
-            Directory.CreateDirectory(appDirectory);
-            var probe = Path.Combine(appDirectory, ".write-test");
-            File.WriteAllText(probe, "ok");
-            File.Delete(probe);
-            return appConfigPath;
+            var backupPath = Path.Combine(
+                Path.GetDirectoryName(ConfigPath)!,
+                $"config.{tag}.{DateTime.Now:yyyyMMdd-HHmmss}.json");
+            File.Copy(ConfigPath, backupPath, true);
+            return backupPath;
         }
         catch
         {
-            var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-            return Path.Combine(appData, "DesktopCountdown", "config.json");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// 优先把配置放在程序目录（便于便携使用）；目录不可写时退回 AppData。
+    /// <para>用 <see cref="FileOptions.DeleteOnClose"/> 做写入探针，文件句柄关闭即自动删除，
+    /// 不会像过去那样在程序目录留下临时文件，也不会在异常退出时残留。</para>
+    /// </summary>
+    private static string ResolveConfigPath()
+    {
+        var appDirectory = AppContext.BaseDirectory;
+        if (IsDirectoryWritable(appDirectory))
+        {
+            return Path.Combine(appDirectory, "config.json");
+        }
+
+        var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+        return Path.Combine(appData, "DesktopCountdown", "config.json");
+    }
+
+    private static bool IsDirectoryWritable(string directory)
+    {
+        try
+        {
+            Directory.CreateDirectory(directory);
+            var probe = Path.Combine(directory, $".write-test-{Guid.NewGuid():N}");
+            using var stream = new FileStream(
+                probe,
+                FileMode.CreateNew,
+                FileAccess.Write,
+                FileShare.None,
+                bufferSize: 1,
+                FileOptions.DeleteOnClose);
+            stream.WriteByte(0);
+            return true;
+        }
+        catch
+        {
+            return false;
         }
     }
 
     private void TryBackupBrokenConfig()
     {
-        try
-        {
-            var backupPath = Path.Combine(
-                Path.GetDirectoryName(ConfigPath)!,
-                $"config.broken.{DateTime.Now:yyyyMMdd-HHmmss}.json");
-            File.Copy(ConfigPath, backupPath, true);
-        }
-        catch
-        {
-            // Best effort only.
-        }
+        Backup("broken");
     }
 }

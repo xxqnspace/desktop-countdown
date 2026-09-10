@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Threading;
 using DesktopCountdown.Models;
 using DesktopCountdown.Services;
 using Forms = System.Windows.Forms;
@@ -7,13 +8,18 @@ namespace DesktopCountdown;
 
 public partial class App : System.Windows.Application
 {
+    /// <summary>拖动 / 缩放时配置落盘的防抖间隔。</summary>
+    private static readonly TimeSpan SaveDebounceInterval = TimeSpan.FromMilliseconds(400);
+
     private SingleInstanceService? _singleInstance;
     private ConfigService _configService = null!;
     private AutoStartService _autoStartService = null!;
-    private Forms.NotifyIcon? _notifyIcon;
+    private TrayService? _tray;
     private MainWindow? _settingsWindow;
     private WidgetWindow? _widgetWindow;
     private LessonWindow? _lessonWindow;
+    private readonly DispatcherTimer _saveDebounce = new() { Interval = SaveDebounceInterval };
+    private bool _saveErrorShown;
 
     public AppConfig Config { get; private set; } = new();
     public bool IsExiting { get; private set; }
@@ -33,10 +39,19 @@ public partial class App : System.Windows.Application
         _configService = new ConfigService();
         _autoStartService = new AutoStartService();
         Config = _configService.Load();
+
+        _saveDebounce.Tick += (_, _) =>
+        {
+            _saveDebounce.Stop();
+            SaveConfig();
+        };
+
+        // 先建托盘，配置迁移过程中的异常提示才有地方显示。
+        CreateTray();
         MigrateConfig(Config);
         Config.Behavior.AutoStart = _autoStartService.IsEnabled();
+        UpdateTrayState();
 
-        CreateTrayIcon();
         ShowWidget();
 
         var isAutoStart = e.Args.Any(arg => arg.Equals("--autostart", StringComparison.OrdinalIgnoreCase));
@@ -50,9 +65,21 @@ public partial class App : System.Windows.Application
     /// 配置升级：SchemaVersion 1 → 2 时，把旧的「液态玻璃」升级为真实的系统亚克力。
     /// 液态玻璃仍作为兼容性回退方案保留，可在设置中手动选择。
     /// </summary>
-    private static void MigrateConfig(AppConfig config)
+    private void MigrateConfig(AppConfig config)
     {
-        if (config.SchemaVersion >= 2)
+        // 配置比程序新（用户先跑过更高版本）时，本次运行会丢掉未知字段，
+        // 因此先备份一份再继续，保证数据可恢复。
+        if (config.SchemaVersion > AppConfig.CurrentSchemaVersion)
+        {
+            var backup = _configService.Backup("newer");
+            _tray?.ShowError(
+                $"配置文件由更高版本创建（SchemaVersion={config.SchemaVersion}），当前程序仅支持到 " +
+                $"{AppConfig.CurrentSchemaVersion}。\n" +
+                (backup is null ? "无法创建备份，请勿保存以免丢失配置。" : $"已自动备份到：\n{backup}"));
+            return;
+        }
+
+        if (config.SchemaVersion >= AppConfig.CurrentSchemaVersion)
         {
             return;
         }
@@ -62,7 +89,7 @@ public partial class App : System.Windows.Application
             config.Appearance.BackgroundMode = BackgroundMode.Acrylic;
         }
 
-        config.SchemaVersion = 2;
+        config.SchemaVersion = AppConfig.CurrentSchemaVersion;
     }
 
     public void ShowSettings()
@@ -92,7 +119,7 @@ public partial class App : System.Windows.Application
         _widgetWindow?.Hide();
         _lessonWindow?.Hide();
         SaveConfig();
-        RefreshTrayMenu();
+        UpdateTrayState();
     }
 
     public void ToggleWidgetVisibility()
@@ -109,7 +136,7 @@ public partial class App : System.Windows.Application
         }
 
         SaveConfig();
-        RefreshTrayMenu();
+        UpdateTrayState();
     }
 
     /// <summary>隐藏课程提示窗口（关闭开关）。</summary>
@@ -118,7 +145,7 @@ public partial class App : System.Windows.Application
         Config.Schedule.Enabled = false;
         _lessonWindow?.Hide();
         SaveConfig();
-        RefreshTrayMenu();
+        UpdateTrayState();
     }
 
     /// <summary>切换课程提示窗口显示状态。</summary>
@@ -127,7 +154,7 @@ public partial class App : System.Windows.Application
         Config.Schedule.Enabled = !Config.Schedule.Enabled;
         UpdateLessonWindowVisibility();
         SaveConfig();
-        RefreshTrayMenu();
+        UpdateTrayState();
     }
 
     /// <summary>按配置显示或隐藏课程窗口（与悬浮窗可见性联动）。</summary>
@@ -166,42 +193,24 @@ public partial class App : System.Windows.Application
         _lessonWindow.FollowTo(_widgetWindow);
     }
 
-    /// <summary>背景模式在「系统亚克力 / 自绘」之间切换时，需要重建悬浮窗（AllowsTransparency 不可运行时修改）。</summary>
-    public void RecreateWidget()
-    {
-        var previous = _widgetWindow;
-        _widgetWindow = null;
-        ShowWidget();
-
-        if (previous is not null)
-        {
-            previous.ForceClose = true;
-            previous.Close();
-        }
-    }
-
-    /// <summary>同上，重建课程提示窗口。</summary>
-    public void RecreateLessonWindow()
-    {
-        var previous = _lessonWindow;
-        _lessonWindow = null;
-        UpdateLessonWindowVisibility();
-
-        if (previous is not null)
-        {
-            previous.ForceClose = true;
-            previous.Close();
-        }
-    }
-
+    /// <summary>
+    /// 应用配置变更。
+    /// <para>背景模式切换不再需要重建窗口 —— 所有模式都使用 layered 窗口
+    /// （<c>AllowsTransparency = true</c>，不可运行时修改），模式差异只体现在画刷与
+    /// 是否开启 accent 模糊上，两者都能在运行时改。</para>
+    /// </summary>
     public void ApplyConfigChanges()
     {
         Config.IsFirstRun = false;
         _widgetWindow?.ApplyConfig();
+        // The lesson window is a separate layered window and must be refreshed
+        // explicitly when it is already open. Visibility updates alone can
+        // leave its old brush and corner settings on screen.
+        _lessonWindow?.ApplyConfig();
         UpdateLessonWindowVisibility();
         SyncLessonWindowPosition();
         SaveConfig();
-        RefreshTrayMenu();
+        UpdateTrayState();
     }
 
     public void SetAutoStart(bool enabled)
@@ -209,7 +218,28 @@ public partial class App : System.Windows.Application
         _autoStartService.SetEnabled(enabled);
         Config.Behavior.AutoStart = enabled;
         SaveConfig();
-        RefreshTrayMenu();
+        UpdateTrayState();
+    }
+
+    /// <summary>
+    /// 请求保存配置（防抖）。
+    /// <para>拖动 / 缩放窗口时 <c>LocationChanged</c>、<c>SizeChanged</c> 会以鼠标频率触发，
+    /// 每次都同步落盘会造成上百次/秒的磁盘写入，因此这里合并成一次延迟写入。</para>
+    /// </summary>
+    public void RequestConfigSave()
+    {
+        _saveDebounce.Stop();
+        _saveDebounce.Start();
+    }
+
+    /// <summary>立即把挂起的防抖保存落盘。</summary>
+    public void FlushPendingSave()
+    {
+        if (_saveDebounce.IsEnabled)
+        {
+            _saveDebounce.Stop();
+            SaveConfig();
+        }
     }
 
     public void SaveConfig()
@@ -217,9 +247,17 @@ public partial class App : System.Windows.Application
         try
         {
             _configService.Save(Config);
+            _saveErrorShown = false;
         }
         catch (Exception ex)
         {
+            // 目录只读或被杀软锁定时会持续失败，这里只提示一次，避免模态框连弹。
+            if (_saveErrorShown)
+            {
+                return;
+            }
+
+            _saveErrorShown = true;
             Forms.MessageBox.Show($"配置保存失败：{ex.Message}", "Desktop Countdown", Forms.MessageBoxButtons.OK, Forms.MessageBoxIcon.Warning);
         }
     }
@@ -243,110 +281,69 @@ public partial class App : System.Windows.Application
             Config.Schedule.Window.Height = _lessonWindow.Height;
         }
 
+        _saveDebounce.Stop();
         SaveConfig();
-        _notifyIcon?.Dispose();
+        _tray?.Dispose();
+        _tray = null;
         Shutdown();
     }
 
     protected override void OnExit(ExitEventArgs e)
     {
-        _notifyIcon?.Dispose();
+        FlushPendingSave();
+        _tray?.Dispose();
+        _tray = null;
         _singleInstance?.Dispose();
         base.OnExit(e);
     }
 
-    private void CreateTrayIcon()
+    private void CreateTray()
     {
-        var iconPath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Assets", "app.ico");
-        System.Drawing.Icon? trayIcon = null;
-        if (System.IO.File.Exists(iconPath))
-        {
-            try { trayIcon = new System.Drawing.Icon(iconPath); } catch { }
-        }
+        _tray = new TrayService();
 
-        _notifyIcon = new Forms.NotifyIcon
-        {
-            Text = "桌面倒计时",
-            Icon = trayIcon ?? System.Drawing.SystemIcons.Application,
-            Visible = true
-        };
-        _notifyIcon.DoubleClick += (_, _) => Dispatcher.Invoke(ShowSettings);
-        RefreshTrayMenu();
-    }
+        _tray.ShowSettingsRequested += () => Dispatcher.Invoke(ShowSettings);
+        _tray.ToggleWidgetRequested += () => Dispatcher.Invoke(ToggleWidgetVisibility);
+        _tray.ToggleLessonRequested += () => Dispatcher.Invoke(ToggleLesson);
+        _tray.SyncRequested += () => Dispatcher.Invoke(UpdateTrayState);
 
-    private void RefreshTrayMenu()
-    {
-        if (_notifyIcon is null)
+        _tray.TopmostChanged += value => Dispatcher.Invoke(() =>
         {
-            return;
-        }
-
-        var menu = new Forms.ContextMenuStrip();
-        menu.Items.Add(Config.Window.Visible ? "隐藏悬浮窗" : "显示悬浮窗", null, (_, _) => Dispatcher.Invoke(ToggleWidgetVisibility));
-        menu.Items.Add("打开设置", null, (_, _) => Dispatcher.Invoke(ShowSettings));
-
-        var lessonItem = new Forms.ToolStripMenuItem("课程提示窗口")
-        {
-            Checked = Config.Schedule.Enabled,
-            CheckOnClick = true,
-            Enabled = Config.Window.Visible
-        };
-        lessonItem.CheckedChanged += (_, _) => Dispatcher.Invoke(() =>
-        {
-            if (lessonItem.Checked == Config.Schedule.Enabled)
-            {
-                return;
-            }
-
-            ToggleLesson();
-        });
-        menu.Items.Add(lessonItem);
-
-        var topmostItem = new Forms.ToolStripMenuItem("始终置顶")
-        {
-            Checked = Config.Window.Topmost,
-            CheckOnClick = true
-        };
-        topmostItem.CheckedChanged += (_, _) => Dispatcher.Invoke(() =>
-        {
-            Config.Window.Topmost = topmostItem.Checked;
+            Config.Window.Topmost = value;
             ApplyConfigChanges();
         });
-        menu.Items.Add(topmostItem);
 
-        var lockedItem = new Forms.ToolStripMenuItem("锁定位置")
+        _tray.LockedChanged += value => Dispatcher.Invoke(() =>
         {
-            Checked = Config.Window.Locked,
-            CheckOnClick = true
-        };
-        lockedItem.CheckedChanged += (_, _) => Dispatcher.Invoke(() =>
-        {
-            Config.Window.Locked = lockedItem.Checked;
+            Config.Window.Locked = value;
             ApplyConfigChanges();
         });
-        menu.Items.Add(lockedItem);
 
-        var autoStartItem = new Forms.ToolStripMenuItem("开机自启")
-        {
-            Checked = Config.Behavior.AutoStart,
-            CheckOnClick = true
-        };
-        autoStartItem.CheckedChanged += (_, _) => Dispatcher.Invoke(() =>
+        _tray.AutoStartChanged += value => Dispatcher.Invoke(() =>
         {
             try
             {
-                SetAutoStart(autoStartItem.Checked);
+                SetAutoStart(value);
             }
             catch (Exception ex)
             {
-                autoStartItem.Checked = Config.Behavior.AutoStart;
-                Forms.MessageBox.Show($"开机自启设置失败：{ex.Message}", "Desktop Countdown", Forms.MessageBoxButtons.OK, Forms.MessageBoxIcon.Warning);
+                _tray?.RevertAutoStart(Config.Behavior.AutoStart);
+                _tray?.ShowError($"开机自启设置失败：{ex.Message}");
             }
         });
-        menu.Items.Add(autoStartItem);
 
-        menu.Items.Add(new Forms.ToolStripSeparator());
-        menu.Items.Add("退出", null, (_, _) => Dispatcher.Invoke(ExitApplication));
-        _notifyIcon.ContextMenuStrip = menu;
+        _tray.ExitRequested += () => Dispatcher.Invoke(ExitApplication);
+
+        UpdateTrayState();
+    }
+
+    /// <summary>同步托盘菜单的文本与勾选状态（不重建菜单控件）。</summary>
+    private void UpdateTrayState()
+    {
+        _tray?.UpdateState(
+            Config.Window.Visible,
+            Config.Schedule.Enabled,
+            Config.Window.Topmost,
+            Config.Window.Locked,
+            Config.Behavior.AutoStart);
     }
 }
